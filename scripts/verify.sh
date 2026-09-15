@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# Verify every network directory in this repo. Run by CI on every push/PR and
+# usable locally: `scripts/verify.sh` (all networks) or `scripts/verify.sh testnet-1`.
+#
+# Enforces ENGINEERING.md §5.2 "networks/<net>/genesis.sha256 matches genesis.json"
+# plus the cheap consistency checks around it:
+#   - genesis.json parses and its chain_id equals the directory name
+#     (the chain-id in genesis decides the network — ENGINEERING.md §1)
+#   - genesis.sha256 is `sha256sum -c` format and matches
+#   - chain.json parses, chain_id equals the directory name, genesis_url points
+#     at this repo's copy of genesis.json
+#   - seeds.txt / persistent_peers.txt lines are `<node-id>@<host>:<port>`
+#   - upgrades/*.md carry every field ENGINEERING.md §6.2 requires
+#   - if `konstellationd` is on PATH, `konstellationd genesis validate` runs too
+#     (CI cannot until a release exists; operators should run it locally).
+#
+# A directory without genesis.json is allowed (pre-genesis, chain.json only).
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+fail=0
+err() { echo "FAIL: $*" >&2; fail=1; }
+ok()  { echo "ok:   $*"; }
+
+if [ $# -gt 0 ]; then
+  nets=("$@")
+else
+  nets=()
+  for d in */; do
+    d=${d%/}
+    [ -f "$d/chain.json" ] || [ -f "$d/genesis.json" ] || continue
+    nets+=("$d")
+  done
+fi
+
+if [ ${#nets[@]} -eq 0 ]; then
+  echo "no network directories found (nothing with chain.json or genesis.json)"
+  exit 0
+fi
+
+# sha256sum is coreutils (CI, Linux operators); macOS ships shasum instead.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+  else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+
+json_get() { # json_get <file> <python expr on `d`>
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))' "$1" "$2"
+}
+
+check_peers_file() { # check_peers_file <file>
+  local f=$1 n=0 bad=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%%#*}; line=${line//[[:space:]]/}
+    [ -z "$line" ] && continue
+    n=$((n+1))
+    if ! [[ $line =~ ^[0-9a-f]{40}@[A-Za-z0-9.-]+:[0-9]{1,5}$ ]]; then
+      err "$f: bad entry '$line' (want <40-hex-node-id>@<host>:<port>)"; bad=1
+    fi
+  done < "$f"
+  if [ "$bad" = 0 ]; then ok "$f: $n entries"; fi
+}
+
+for net in "${nets[@]}"; do
+  echo "== $net"
+  [ -d "$net" ] || { err "$net: not a directory"; continue; }
+
+  # --- chain.json -----------------------------------------------------------
+  if [ -f "$net/chain.json" ]; then
+    if ! python3 -m json.tool "$net/chain.json" >/dev/null 2>&1; then
+      err "$net/chain.json: not valid JSON"
+    else
+      cid=$(json_get "$net/chain.json" 'd["chain_id"]')
+      [ "$cid" = "$net" ] || err "$net/chain.json: chain_id '$cid' != directory '$net'"
+      gurl=$(json_get "$net/chain.json" 'd.get("codebase",{}).get("genesis",{}).get("genesis_url","")')
+      case "$gurl" in
+        */networks/main/"$net"/genesis.json) ;;
+        "") err "$net/chain.json: codebase.genesis.genesis_url is empty" ;;
+        *) err "$net/chain.json: genesis_url '$gurl' does not point at this repo's $net/genesis.json" ;;
+      esac
+      ok "$net/chain.json"
+    fi
+  else
+    err "$net/chain.json: missing (ENGINEERING.md §6.2)"
+  fi
+
+  # --- genesis.json + genesis.sha256 ----------------------------------------
+  if [ -f "$net/genesis.json" ]; then
+    if ! python3 -m json.tool "$net/genesis.json" >/dev/null 2>&1; then
+      err "$net/genesis.json: not valid JSON"
+    else
+      cid=$(json_get "$net/genesis.json" 'd["chain_id"]')
+      [ "$cid" = "$net" ] || err "$net/genesis.json: chain_id '$cid' != directory '$net'"
+      ok "$net/genesis.json: chain_id $cid"
+    fi
+    if [ ! -f "$net/genesis.sha256" ]; then
+      err "$net/genesis.sha256: missing"
+    else
+      # Exactly one line, `<hash>  genesis.json`, so operators can run
+      # `sha256sum -c genesis.sha256` unchanged.
+      if [ "$(wc -l < "$net/genesis.sha256" | tr -d ' ')" != 1 ] \
+         || ! grep -Eq '^[0-9a-f]{64}  genesis\.json$' "$net/genesis.sha256"; then
+        err "$net/genesis.sha256: must be exactly one line '<sha256>  genesis.json'"
+      elif [ "$(cut -d' ' -f1 "$net/genesis.sha256")" = "$(sha256_of "$net/genesis.json")" ]; then
+        ok "$net/genesis.sha256 matches genesis.json"
+      else
+        err "$net/genesis.sha256 does not match genesis.json (actual $(sha256_of "$net/genesis.json"))"
+      fi
+    fi
+    if command -v konstellationd >/dev/null 2>&1; then
+      if konstellationd genesis validate "$net/genesis.json" >/dev/null 2>&1; then
+        ok "$net/genesis.json: konstellationd genesis validate"
+      else
+        err "$net/genesis.json: konstellationd genesis validate failed"
+      fi
+    else
+      echo "skip: konstellationd not on PATH, 'genesis validate' not run"
+    fi
+  else
+    if [ -f "$net/genesis.sha256" ]; then err "$net/genesis.sha256 exists without genesis.json"; fi
+    echo "note: $net has no genesis.json yet"
+  fi
+
+  # --- peers ----------------------------------------------------------------
+  for f in seeds.txt persistent_peers.txt; do
+    if [ -f "$net/$f" ]; then check_peers_file "$net/$f"; fi
+  done
+
+  # --- upgrades/*.md: ENGINEERING.md §6.2 mandatory fields -------------------
+  if [ -d "$net/upgrades" ]; then
+    for u in "$net"/upgrades/*.md; do
+      [ -e "$u" ] || continue
+      bad=0
+      for field in "Upgrade name" "Halt height" "Binary" "SHA256" "Config changes" "Rollback"; do
+        grep -qi "^#* *$field\|^| *$field\|^\*\*$field" "$u" || { err "$u: missing '$field' section (ENGINEERING.md §6.2)"; bad=1; }
+      done
+      if [ "$bad" = 0 ]; then ok "$u"; fi
+    done
+  fi
+done
+
+if [ "$fail" -ne 0 ]; then
+  echo "verify: FAILED" >&2
+  exit 1
+fi
+echo "verify: all checks passed"

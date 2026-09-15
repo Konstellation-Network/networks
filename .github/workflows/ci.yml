@@ -1,0 +1,22 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      # ENGINEERING.md §5.2: `networks/<net>/genesis.sha256` matches `genesis.json`,
+      # enforced here. See scripts/verify.sh for the full list of checks.
+      - run: scripts/verify.sh
+      - name: shellcheck
+        run: |
+          sudo apt-get install -y -qq shellcheck >/dev/null
+          shellcheck scripts/*.sh
