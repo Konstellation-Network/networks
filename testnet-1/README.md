@@ -89,7 +89,9 @@ curl -fsSL https://raw.githubusercontent.com/Konstellation-Network/networks/main
 ### 5. Peers and config
 
 `config.toml` `[p2p]`: `seeds` from `seeds.txt`, `persistent_peers` from
-`persistent_peers.txt` (comma-joined). Keep `prometheus = true` (port 26660).
+`persistent_peers.txt` (comma-joined). Set `prometheus = true` under
+`[instrumentation]` (`init` leaves it `false`; metrics on 26660 are what the
+alerting in ENGINEERING.md §9.2 reads).
 
 Recommended `app.toml` for a non-archive node (ENGINEERING.md §9.2):
 

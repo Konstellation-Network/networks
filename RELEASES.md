@@ -6,9 +6,10 @@ checksum recorded in `networks`*). Operators and `infra`'s ansible
 (`konstellationd_version` / `konstellationd_sha256`) take checksums from here,
 never from a chat message or a guess.
 
-Adding a row is part of the release checklist. The checksum is the one printed by
-`make build` in `konstellation` at the tag and re-verified against the GitHub
-Release asset; the same value goes into the network's `upgrades/*.md` when the
+Adding a row is part of the release checklist. The checksum is of the
+**`linux-amd64` release asset** — `make build-linux` in `konstellation` at the
+tag prints it (plain `make build` hashes a host-platform binary, which will never
+match) — re-verified against the GitHub Release asset with `sha256sum`; the same value goes into the network's `upgrades/*.md` when the
 release is an upgrade.
 
 | Version | Date | Binary | SHA256 | Networks | Notes |

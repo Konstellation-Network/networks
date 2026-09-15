@@ -35,6 +35,10 @@ cd "$(dirname "$0")/.."
 
 net=${1:-}; [ -n "$net" ] || { echo "usage: GENESIS_TIME=<rfc3339> $0 <net> [options]" >&2; exit 2; }
 shift
+net=${net%/}
+case "$net" in
+  ""|*/*|.*) echo "'$net' is not a plain network directory name (it becomes the chain-id)" >&2; exit 2 ;;
+esac
 allocations="$net/allocations.json"; gentxs=""; binary="konstellationd"; pre_gentx=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -66,7 +70,14 @@ echo "== binary: $("$binary" version 2>/dev/null | tail -1) ($(command -v "$bina
 # 1. Chain defaults. `init` with a real network's chain-id writes every module's
 #    genesis from app.DefaultGenesis (esp everywhere, D10/D11 params, the
 #    preinstalls), so nothing here is patched by hand.
-"$binary" init "genesis-$net" --chain-id "$net" --home "$home" >/dev/null 2>&1
+run() { # run <description> <cmd...>: quiet on success, full output on failure
+  local what=$1; shift
+  local out
+  if ! out=$("$@" 2>&1); then
+    echo "$what failed:" >&2; echo "$out" >&2; exit 1
+  fi
+}
+run "konstellationd init" "$binary" init "genesis-$net" --chain-id "$net" --home "$home"
 
 # 2. Allocations. Whole KASH in the file, esp on chain: 1 KASH = 10^18 esp.
 #    The shape must follow TOKENOMICS.md §7 (see <net>/README.md for the
@@ -102,7 +113,7 @@ if [ -n "$gentxs" ]; then
   mkdir -p "$home/config/gentx"
   cp "${gentx_files[@]}" "$home/config/gentx/"
   echo "== ${#gentx_files[@]} gentxs"
-  "$binary" genesis collect-gentxs --home "$home" >/dev/null 2>&1
+  run "genesis collect-gentxs" "$binary" genesis collect-gentxs --home "$home"
 fi
 
 # 4. Fix genesis_time (init stamps "now", which would make the file
@@ -116,8 +127,7 @@ with open(p, "w") as f:
     json.dump(g, f, indent=2, sort_keys=True)
     f.write("\n")
 PY
-"$binary" genesis validate "$home/config/genesis.json" --home "$home" >/dev/null 2>&1 \
-  || { echo "genesis validate failed:" >&2; "$binary" genesis validate "$home/config/genesis.json" --home "$home"; exit 1; }
+run "genesis validate" "$binary" genesis validate "$home/config/genesis.json" --home "$home"
 echo "== genesis validate: ok (genesis_time $GENESIS_TIME)"
 
 # 5. Publish into the repo.

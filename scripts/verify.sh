@@ -19,12 +19,22 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Where operators fetch from; chain.json's genesis_url must be exactly this path.
+repo_raw="https://raw.githubusercontent.com/Konstellation-Network/networks/main"
+
 fail=0
 err() { echo "FAIL: $*" >&2; fail=1; }
 ok()  { echo "ok:   $*"; }
 
 if [ $# -gt 0 ]; then
-  nets=("$@")
+  nets=()
+  for n in "$@"; do
+    n=${n%/}
+    case "$n" in
+      ""|*/*|.*) echo "FAIL: '$n' is not a plain network directory name" >&2; exit 1 ;;
+    esac
+    nets+=("$n")
+  done
 else
   nets=()
   for d in */; do
@@ -55,7 +65,8 @@ check_peers_file() { # check_peers_file <file>
     line=${line%%#*}; line=${line//[[:space:]]/}
     [ -z "$line" ] && continue
     n=$((n+1))
-    if ! [[ $line =~ ^[0-9a-f]{40}@[A-Za-z0-9.-]+:[0-9]{1,5}$ ]]; then
+    # host is a DNS name, an IPv4 literal, or a bracketed IPv6 literal.
+    if ! [[ $line =~ ^[0-9a-f]{40}@([A-Za-z0-9.-]+|\[[0-9a-fA-F:]+\]):[0-9]{1,5}$ ]]; then
       err "$f: bad entry '$line' (want <40-hex-node-id>@<host>:<port>)"; bad=1
     fi
   done < "$f"
@@ -71,15 +82,16 @@ for net in "${nets[@]}"; do
     if ! python3 -m json.tool "$net/chain.json" >/dev/null 2>&1; then
       err "$net/chain.json: not valid JSON"
     else
-      cid=$(json_get "$net/chain.json" 'd["chain_id"]')
-      [ "$cid" = "$net" ] || err "$net/chain.json: chain_id '$cid' != directory '$net'"
+      bad=0
+      cid=$(json_get "$net/chain.json" 'd.get("chain_id","")')
+      [ "$cid" = "$net" ] || { err "$net/chain.json: chain_id '$cid' != directory '$net'"; bad=1; }
       gurl=$(json_get "$net/chain.json" 'd.get("codebase",{}).get("genesis",{}).get("genesis_url","")')
       case "$gurl" in
-        */networks/main/"$net"/genesis.json) ;;
-        "") err "$net/chain.json: codebase.genesis.genesis_url is empty" ;;
-        *) err "$net/chain.json: genesis_url '$gurl' does not point at this repo's $net/genesis.json" ;;
+        "$repo_raw/$net/genesis.json") ;;
+        "") err "$net/chain.json: codebase.genesis.genesis_url is empty"; bad=1 ;;
+        *) err "$net/chain.json: genesis_url '$gurl' != $repo_raw/$net/genesis.json"; bad=1 ;;
       esac
-      ok "$net/chain.json"
+      if [ "$bad" = 0 ]; then ok "$net/chain.json"; fi
     fi
   else
     err "$net/chain.json: missing (ENGINEERING.md §6.2)"
@@ -90,9 +102,9 @@ for net in "${nets[@]}"; do
     if ! python3 -m json.tool "$net/genesis.json" >/dev/null 2>&1; then
       err "$net/genesis.json: not valid JSON"
     else
-      cid=$(json_get "$net/genesis.json" 'd["chain_id"]')
-      [ "$cid" = "$net" ] || err "$net/genesis.json: chain_id '$cid' != directory '$net'"
-      ok "$net/genesis.json: chain_id $cid"
+      cid=$(json_get "$net/genesis.json" 'd.get("chain_id","")')
+      if [ "$cid" = "$net" ]; then ok "$net/genesis.json: chain_id $cid"
+      else err "$net/genesis.json: chain_id '$cid' != directory '$net'"; fi
     fi
     if [ ! -f "$net/genesis.sha256" ]; then
       err "$net/genesis.sha256: missing"
@@ -109,7 +121,8 @@ for net in "${nets[@]}"; do
       fi
     fi
     if command -v konstellationd >/dev/null 2>&1; then
-      if konstellationd genesis validate "$net/genesis.json" >/dev/null 2>&1; then
+      # --home a throwaway dir: without it the binary writes ~/.konstellationd/config/*.toml.
+      if konstellationd genesis validate "$net/genesis.json" --home "$(mktemp -d)" >/dev/null 2>&1; then
         ok "$net/genesis.json: konstellationd genesis validate"
       else
         err "$net/genesis.json: konstellationd genesis validate failed"
