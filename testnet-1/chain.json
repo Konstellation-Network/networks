@@ -1,0 +1,55 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cosmos/chain-registry/master/chain.schema.json",
+  "chain_name": "konstellationtestnet",
+  "chain_type": "cosmos",
+  "status": "upcoming",
+  "network_type": "testnet",
+  "pretty_name": "Konstellation Testnet",
+  "chain_id": "testnet-1",
+  "bech32_prefix": "kons",
+  "daemon_name": "konstellationd",
+  "node_home": "$HOME/.konstellationd",
+  "key_algos": ["ethsecp256k1"],
+  "extra_codecs": ["ethermint"],
+  "slip44": 60,
+  "fees": {
+    "fee_tokens": [
+      {
+        "denom": "esp",
+        "fixed_min_gas_price": 0,
+        "low_gas_price": 1000000000,
+        "average_gas_price": 1000000000,
+        "high_gas_price": 2000000000
+      }
+    ]
+  },
+  "staking": {
+    "staking_tokens": [{ "denom": "esp" }]
+  },
+  "codebase": {
+    "git_repo": "https://github.com/Konstellation-Network/konstellation",
+    "recommended_version": "",
+    "compatible_versions": [],
+    "binaries": {},
+    "consensus": { "type": "cometbft", "version": "v0.39.3" },
+    "sdk": { "type": "cosmos", "version": "v0.54.3" },
+    "ibc": { "type": "go", "version": "v11.0.0" },
+    "cosmwasm": { "enabled": false },
+    "genesis": {
+      "genesis_url": "https://raw.githubusercontent.com/Konstellation-Network/networks/main/testnet-1/genesis.json"
+    }
+  },
+  "peers": {
+    "seeds": [],
+    "persistent_peers": []
+  },
+  "apis": {
+    "rpc": [],
+    "rest": [],
+    "grpc": [],
+    "evm-http-jsonrpc": [],
+    "evm-ws-jsonrpc": []
+  },
+  "explorers": [],
+  "keywords": ["evm", "testnet"]
+}
