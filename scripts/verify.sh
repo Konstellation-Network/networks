@@ -6,6 +6,13 @@
 # plus the cheap consistency checks around it:
 #   - genesis.json parses and its chain_id equals the directory name
 #     (the chain-id in genesis decides the network — ENGINEERING.md §1)
+#   - for a known network (scripts/networks.sh), genesis.json carries exactly
+#     its launch-validator count of gentxs: devnet-1 1, testnet-1 and
+#     konstellation-1 4 (D7, re-decided 2026-09-29)
+#   - allocations.example.json, if present, is the TOKENOMICS.md §7 shape:
+#     sums to 1 000 000 000 KASH and, for a known network, has one
+#     "validator bootstrap ..." entry per launch validator summing to the
+#     120 M bucket
 #   - genesis.sha256 is `sha256sum -c` format and matches
 #   - chain.json parses, chain_id equals the directory name, genesis_url points
 #     at this repo's copy of genesis.json
@@ -18,6 +25,8 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# shellcheck source=scripts/networks.sh
+. scripts/networks.sh
 
 # Where operators fetch from; chain.json's genesis_url must be exactly this path.
 repo_raw="https://raw.githubusercontent.com/Konstellation-Network/networks/main"
@@ -76,6 +85,7 @@ check_peers_file() { # check_peers_file <file>
 for net in "${nets[@]}"; do
   echo "== $net"
   [ -d "$net" ] || { err "$net: not a directory"; continue; }
+  want_vals=$(launch_validators "$net")
 
   # --- chain.json -----------------------------------------------------------
   if [ -f "$net/chain.json" ]; then
@@ -105,6 +115,11 @@ for net in "${nets[@]}"; do
       cid=$(json_get "$net/genesis.json" 'd.get("chain_id","")')
       if [ "$cid" = "$net" ]; then ok "$net/genesis.json: chain_id $cid"
       else err "$net/genesis.json: chain_id '$cid' != directory '$net'"; fi
+      if [ -n "$want_vals" ]; then
+        ngen=$(json_get "$net/genesis.json" 'len(((d.get("app_state") or {}).get("genutil") or {}).get("gen_txs") or [])')
+        if [ "$ngen" = "$want_vals" ]; then ok "$net/genesis.json: $ngen gentxs"
+        else err "$net/genesis.json: $ngen gentxs, $net launches with $want_vals validator(s) (scripts/networks.sh)"; fi
+      fi
     fi
     if [ ! -f "$net/genesis.sha256" ]; then
       err "$net/genesis.sha256: missing"
@@ -133,6 +148,38 @@ for net in "${nets[@]}"; do
   else
     if [ -f "$net/genesis.sha256" ]; then err "$net/genesis.sha256 exists without genesis.json"; fi
     echo "note: $net has no genesis.json yet"
+  fi
+
+  # --- allocations.example.json: TOKENOMICS.md §7 shape ---------------------
+  if [ -f "$net/allocations.example.json" ]; then
+    if msg=$(python3 - "$net/allocations.example.json" "$want_vals" 2>&1 <<'PY'
+import json, sys
+path, want = sys.argv[1], sys.argv[2]
+try:
+    allocs = json.load(open(path))
+except ValueError as e:
+    sys.exit(f"not valid JSON: {e}")
+if not isinstance(allocs, list):
+    sys.exit("must be a JSON list of {address, kash, note}")
+total, boot = 0, []
+for a in allocs:
+    kash = a.get("kash")
+    if not isinstance(kash, int) or isinstance(kash, bool) or kash <= 0:
+        sys.exit(f"kash must be a positive integer (whole KASH) in {a!r}")
+    total += kash
+    if a.get("note", "").startswith("validator bootstrap"):
+        boot.append(kash)
+if total != 1_000_000_000:
+    sys.exit(f"sums to {total} KASH, TOKENOMICS.md §7 genesis supply is 1000000000")
+if want:
+    if len(boot) != int(want):
+        sys.exit(f"{len(boot)} 'validator bootstrap' entries, network launches with {want} validator(s) (scripts/networks.sh)")
+    if sum(boot) != 120_000_000:
+        sys.exit(f"validator bootstrap entries sum to {sum(boot)} KASH, TOKENOMICS.md §7 bucket is 120000000")
+print(f"{len(allocs)} entries, 1 B KASH, {len(boot)} validator bootstrap")
+PY
+    ); then ok "$net/allocations.example.json: $msg"
+    else err "$net/allocations.example.json: $msg"; fi
   fi
 
   # --- peers ----------------------------------------------------------------
