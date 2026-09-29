@@ -10,13 +10,16 @@
 # (ENGINEERING.md §15 phase 8).
 #
 # Usage:
-#   GENESIS_TIME=2026-10-01T12:00:00Z scripts/gen-genesis.sh testnet-1 \
-#       [--allocations testnet-1/allocations.json] [--gentxs <dir>] \
+#   GENESIS_TIME=2026-10-01T12:00:00Z scripts/gen-genesis.sh <net> \
+#       [--allocations <net>/allocations.json] [--gentxs <dir>] \
 #       [--binary /path/to/konstellationd] [--pre-gentx]
 #
 #   --allocations  JSON list of {"address","kash","note"}; amounts in whole KASH
 #                  (1 KASH = 10^18 esp). Default: <net>/allocations.json.
 #   --gentxs       directory of gentx-*.json from each launch validator.
+#                  For a known network the count is enforced
+#                  (scripts/networks.sh: devnet-1 1, testnet-1 and
+#                  konstellation-1 4 — D7 re-decided 2026-09-29).
 #                  Omit with --pre-gentx to publish the allocation-only genesis
 #                  that validators run `konstellationd genesis gentx` against.
 #   --binary       konstellationd to use. Default: `konstellationd` on PATH.
@@ -25,13 +28,16 @@
 #                  and skip the sha256 (it is an intermediate artifact).
 #
 # Two-step ceremony (the SDK's standard flow):
-#   1. --pre-gentx → commit genesis.pre-gentx.json → each validator: add it as
-#      config/genesis.json, `genesis gentx <key> <amount>esp --chain-id <net>
-#      --commission-rate ≥0.05 --min-self-delegation ...`, send back the gentx.
+#   1. --pre-gentx → commit genesis.pre-gentx.json → each launch validator (all
+#      foundation-run, D7): add it as config/genesis.json, `genesis gentx <key>
+#      <amount>esp --chain-id <net> --commission-rate ≥0.05
+#      --min-self-delegation ...`, hand back the gentx.
 #   2. --gentxs <dir> → genesis.json + genesis.sha256 → commit → publish hash.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# shellcheck source=scripts/networks.sh
+. scripts/networks.sh
 
 net=${1:-}; [ -n "$net" ] || { echo "usage: GENESIS_TIME=<rfc3339> $0 <net> [options]" >&2; exit 2; }
 shift
@@ -59,6 +65,11 @@ fi
 if [ -n "$gentxs" ]; then
   gentx_files=("$gentxs"/*.json)
   [ -e "${gentx_files[0]}" ] || { echo "no *.json gentxs in $gentxs" >&2; exit 2; }
+  want=$(launch_validators "$net")
+  if [ -n "$want" ] && [ "${#gentx_files[@]}" != "$want" ]; then
+    echo "$net launches with $want validator(s) (D7, scripts/networks.sh); $gentxs has ${#gentx_files[@]} gentxs" >&2
+    exit 2
+  fi
 fi
 mkdir -p "$net"
 
