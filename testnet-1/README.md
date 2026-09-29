@@ -1,5 +1,15 @@
 # testnet-1
 
+**The operations and validator-rehearsal network.** Building a dapp? Use
+[`devnet-1`](../devnet-1/README.md) — it runs the mainnet binary, is rarely
+reset, and nothing on it gets drilled. testnet-1 is where the foundation
+rehearses everything before it touches mainnet: it gets every new release
+first, and it is where upgrade drills, halt-and-restart drills, chaos tests
+(validators killed mid-block) and D16 validator admissions happen
+(ENGINEERING.md §15 phase 5). Expect planned halts, forced upgrades and
+deliberately broken validators. Upgrade order is **testnet-1 → devnet-1 →
+konstellation-1** (D7, re-decided 2026-09-29).
+
 **Status: pre-genesis.** No `genesis.json`, peers or endpoints yet — this page
 describes how joining will work and is being written ahead of the network so
 that the first operators can find its gaps (ENGINEERING.md §15 phases 5–6). Items
@@ -114,29 +124,29 @@ konstellationd status | jq .sync_info
 A systemd unit is in `infra/ansible/roles/cosmovisor/templates/cosmovisor.service.j2`
 (private repo) if you want the reference shape.
 
-## Run a validator
+## Validators
 
-At genesis the validator set is **in-house** (5 nodes, ENGINEERING.md §9.4, §18);
-3–5 external operators are invited in phase 6. Both paths:
+The genesis set is **4 validators, all foundation-run**, each in a separate
+failure domain (D7, re-decided 2026-09-29; which providers is not decided yet).
+They are the only gentxs in the genesis — there is no gentx path for anyone
+else, and `scripts/gen-genesis.sh` refuses a testnet-1 genesis with any other
+count.
 
-- **At genesis:** you receive `genesis.pre-gentx.json` with your bootstrap
-  allocation already in it. Use it as `config/genesis.json`, create your key,
-  and produce a gentx; send the file back for `scripts/gen-genesis.sh --gentxs`.
+**Admission is permissioned (D16).** `MsgCreateValidator` is disabled in
+`x/circuit` from genesis, so `konstellationd tx staking create-validator` is
+refused for everyone. An operator is admitted only through the D16 procedure:
+the circuit super admin re-enables the message for a window of a few blocks,
+the admitted operator submits `create-validator` from a synced node, and the
+message is disabled again (`infra/runbooks/validator-admission.md`). testnet-1
+exists partly to rehearse exactly this before it is ever done on mainnet
+(ENGINEERING.md §15 phases 5–6). If you are asked to take part in an admission
+drill you will be told the window; do not pre-sign and broadcast early — a
+`create-validator` sent before the window opens is refused and must be
+re-signed.
 
-  ```sh
-  konstellationd keys add validator --key-type eth_secp256k1
-  konstellationd genesis gentx validator 24000000000000000000000000esp \
-    --chain-id testnet-1 --moniker <moniker> \
-    --commission-rate 0.05 --commission-max-rate 0.20 --commission-max-change-rate 0.01 \
-    --min-self-delegation 1000000000000000000
-  ```
-
-- **After genesis:** sync a full node first, then `konstellationd tx staking
-  create-validator` with the same parameters.
-
-Staking parameters that bind either way (D10): `min_commission_rate` **5 %**,
-`max_validators` **30**, unbonding **21 days**, downtime slash **0.01 %**,
-double-sign slash **5 %** with permanent jail.
+Staking parameters (D10): `min_commission_rate` **5 %**, `max_validators`
+**30**, unbonding **21 days**, downtime slash **0.01 %**, double-sign slash
+**5 %** with permanent jail.
 
 **Run validators behind sentries** (`pex = false`, `persistent_peers` = your
 sentries only, no public IP; sentries carry your node id in `private_peer_ids`)
@@ -147,8 +157,11 @@ has no money at stake; the habit is the point.
 
 ## Wallets and dapps
 
-MetaMask / Rabby: network name `Konstellation Testnet`, chain id `56671`,
-currency `KASH`, RPC URL **TBD**, explorer **TBD**. Canonical preinstalls
+Dapp development belongs on [`devnet-1`](../devnet-1/README.md) (EIP-155
+`56672`); testnet-1 is halted and upgraded on purpose. For testing against the
+next release before it reaches devnet-1: MetaMask / Rabby network name
+`Konstellation Testnet`, chain id `56671`, currency `KASH`, RPC URL **TBD**,
+explorer **TBD**. Canonical preinstalls
 (`Multicall3`, `Permit2`, `Create2Deployer`, ERC-4337 `EntryPoint` v0.7 and v0.8
 with their `SenderCreator`s) are live at their mainnet-canonical addresses from
 block 1; the list is in the `contracts` repo. `WKASH` is deployed post-genesis
@@ -157,8 +170,8 @@ block 1; the list is in the `contracts` repo. `WKASH` is deployed post-genesis
 ## Genesis allocation
 
 The `TOKENOMICS.md §7` shape (1 B KASH), filled with **test addresses**; the
-faucet holds the 8 % "liquidity & public distribution" bucket and the five
-launch validators each self-delegate 24 M of the 12 % bootstrap bucket. See
+faucet holds the 8 % "liquidity & public distribution" bucket and the four
+launch validators each self-delegate 30 M of the 12 % bootstrap bucket. See
 `allocations.example.json` and `../scripts/gen-genesis.sh`. Nothing on this
 network is vesting-locked — the D12 vesting contracts are exercised here as
 ordinary contract deployments, not as genesis state.

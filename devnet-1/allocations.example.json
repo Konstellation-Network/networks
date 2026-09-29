@@ -1,0 +1,9 @@
+[
+  { "address": "", "kash": 220000000, "note": "founding team & early contributors (22 %) — one test address; on mainnet D12 vesting contracts, one per person" },
+  { "address": "", "kash": 180000000, "note": "community: ecosystem & developer grants (18 %) — test address" },
+  { "address": "", "kash": 100000000, "note": "community: user & developer incentives (10 %) — test address" },
+  { "address": "", "kash":  50000000, "note": "community: on-chain community pool seed (5 %) — test address; on mainnet the x/distribution community pool" },
+  { "address": "", "kash": 250000000, "note": "treasury / foundation (25 %) — dev multisig" },
+  { "address": "", "kash": 120000000, "note": "validator bootstrap 1/1 (12 % total) — the single foundation-run devnet validator, self-delegated via gentx" },
+  { "address": "", "kash":  80000000, "note": "liquidity & public distribution (8 %) — the devnet faucet holds this (ENGINEERING.md §18)" }
+]
