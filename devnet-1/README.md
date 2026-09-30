@@ -171,8 +171,82 @@ konstellationd status | jq .sync_info
 ## Genesis allocation
 
 The `TOKENOMICS.md §7` shape (1 B KASH), filled with **test addresses**, same
-as testnet-1 except that the whole 12 % bootstrap bucket (120 M) is
-self-delegated by the single foundation validator. The faucet holds the 8 %
+as testnet-1 except that the whole 12 % bootstrap bucket (120 M) goes to the
+single foundation validator, which self-delegates all of it but 1 000 KASH
+(kept liquid for fees). The faucet holds the 8 %
 "liquidity & public distribution" bucket. See `allocations.example.json` and
 `../scripts/gen-genesis.sh` (which refuses a devnet-1 genesis with other than
 one gentx).
+
+## Cutting the genesis (maintainers)
+
+devnet-1's genesis is cut once, on the founder's PC, by
+[`../scripts/devnet-keys.sh`](../scripts/devnet-keys.sh). It needs the release
+binary, so the order is:
+
+1. **Release tag** — the first signed `konstellation` release exists.
+2. **Run the script** with `konstellationd` built from that tag on the PC
+   (`make build` at the tag; the genesis comes from its `init` defaults, and
+   `GENESIS_TIME` is the launch time, a founder decision):
+
+   ```sh
+   mkdir -p ~/konstellation-keys          # the parent; must not be inside a git repo
+   GENESIS_TIME=<launch, e.g. 2026-10-15T12:00:00Z> scripts/devnet-keys.sh \
+     --binary ~/src/konstellation/build/konstellationd \
+     --key-dir ~/konstellation-keys/devnet-1
+   ```
+
+   It asks for a keyring password twice (keep it in a password manager, not
+   with the backup). It refuses a key directory that exists or is inside a git
+   work tree, and refuses to run if `devnet-1` already has an `allocations.json`,
+   `gentx/` or `genesis.json` (a reset is STATUS P30). Avoid cloud-synced
+   folders (iCloud Desktop & Documents, Dropbox): two of the keys are plain files.
+3. **Commit** `allocations.json`, `gentx/`, `genesis.json` and `genesis.sha256`
+   (public addresses, the signed gentx, hashes; the script prints the command
+   that reproduces the hash) and fill this README's **TBD**s.
+4. **Record** the binary in `../RELEASES.md` in the same PR.
+
+What the key directory holds (created `0700`):
+
+| Path | What | Where it goes |
+|---|---|---|
+| `keyring-file/` | 8 account keys, encrypted with the password: `validator` (operator), `faucet`, `circuit-admin`, `team`, `grants`, `incentives`, `community-pool`, `treasury` — one per row of `allocations.example.json` | stays on the PC; no mnemonic is shown or saved (`keys add --no-backup`), so this directory plus the password **is** the backup |
+| `validator/config/priv_validator_key.json` | consensus key, **not encrypted** | **validator server (server 1)**, `<home>/config/`, mode `0600`; nowhere else, and never two nodes with it (ENGINEERING.md §2.7) |
+| `validator/config/node_key.json` | p2p identity, not encrypted | validator server, with the key above |
+| `gentx/`, `PUBLIC.txt` | the signed gentx; every address, node id and hash | public |
+
+**Backup (STATUS P29):** the founder keeps the directory on the PC and an
+**encrypted copy off the machine**, e.g.
+`tar -czf - devnet-1 | gpg --symmetric --cipher-algo AES256 -o devnet-1-keys.tgz.gpg`
+(or `age -p`). Losing both means a new devnet genesis.
+
+**Faucet key:** the `faucet` service reads the faucet account's EVM private
+key from `FAUCET_PRIVATE_KEY`. Install it only when deploying the faucet, with
+[`../scripts/devnet-faucet-key.sh`](../scripts/devnet-faucet-key.sh):
+
+```sh
+scripts/devnet-faucet-key.sh --binary <konstellationd> \
+  --key-dir ~/konstellation-keys/devnet-1 --to <ssh host>:<faucet env file>
+```
+
+It exports the key locally first: a throwaway export password (any 8+
+characters, used only in memory), then the keyring password, typed on the
+terminal. It refuses anything that is not a 64-hex key, so a wrong password
+never installs an empty key. Only then does it ssh, and it replaces **just**
+the `FAUCET_PRIVATE_KEY=` line; `RPC_URL`, `CHAIN_ID` and the rest of the env
+file are kept, and the file ends up `0600`. The key is never printed, never an
+argument, never in shell history. The faucet holds the 80 M "liquidity" row;
+its README advises topping the service's key up in tranches instead, which
+would need a separate liquidity key (not done: the example allocations give
+the faucet the row).
+
+Gentx defaults: 119 999 000 KASH of the 120 M bootstrap row self-delegated
+(1 000 KASH stays liquid, so the operator can pay fees to withdraw rewards or
+edit the validator), commission 5 %
+(the D10 minimum; max 20 %, max change 1 %/day), `min-self-delegation` 1 esp,
+and `127.0.0.1` as the IP in the gentx memo so no real address is published
+(peering comes from `persistent_peers.txt`). Each is a flag; see
+`scripts/devnet-keys.sh --help`. Every value is checked before any key exists,
+including the ones `genesis validate` accepts but InitChain rejects: a moniker
+over 70 characters, a minimum self-delegation above the self-delegation, and a
+zero amount written as `00`.
