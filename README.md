@@ -103,3 +103,7 @@ height → cosmovisor swaps. testnet-1: same file, applied with
 rehearsed (ENGINEERING.md §9.4). devnet-1: same file; full-node operators
 stage the binary from it. Cosmovisor auto-download is **off** everywhere; operators stage the
 binary by hand after checking the SHA256 in the upgrade file (ENGINEERING.md §9.2).
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE). The Konstellation name and logo are trademarks and are not licensed; see the [trademark policy](https://github.com/Konstellation-Network/.github).
