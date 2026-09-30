@@ -19,9 +19,11 @@
 #       --binary <path/to/konstellationd built from the release tag> \
 #       --key-dir <new directory outside any git repo, e.g. ~/konstellation-keys/devnet-1>
 #   Options:
-#     --moniker <name>              validator moniker (default devnet-1-validator)
+#     --moniker <name>              validator moniker, 1-70 characters (default devnet-1-validator)
 #     --self-delegation <KASH>      gentx self-delegation, whole KASH (default: the
-#                                   whole validator bootstrap row, 120 000 000)
+#                                   validator bootstrap row minus 1 000 KASH, which
+#                                   stays liquid so the operator can pay fees to
+#                                   withdraw rewards or edit the validator)
 #     --min-self-delegation <esp>   default 1 (the SDK default, in esp)
 #     --commission-rate <dec>       default 0.05 (x/staking min_commission_rate, D10)
 #     --commission-max-rate <dec>   default 0.20
@@ -35,8 +37,11 @@
 # The keyring password is asked twice on the terminal and fed to each
 # konstellationd call on stdin; it is never an argument or an env var.
 # Nothing secret is printed: mnemonics are not generated for display
-# (`keys add --no-backup`), the faucet's EVM key is not exported. What to back
-# up, what goes to the validator server and the next steps are printed at the end.
+# (`keys add --no-backup`), the faucet's EVM key is not exported (that is
+# scripts/devnet-faucet-key.sh, at faucet deploy time). What to back up, what
+# goes to the validator server and the next steps are printed at the end.
+# Every binary call gets an explicit --home, so nothing is written to
+# ~/.konstellationd on this PC.
 set -euo pipefail
 
 net=devnet-1
@@ -80,6 +85,10 @@ if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z", t):
     sys.exit(1)
 datetime.datetime.strptime(t[:19], "%Y-%m-%dT%H:%M:%S")
 PY
+if python3 -c 'import datetime,sys; u=datetime.timezone.utc; t=datetime.datetime.strptime(sys.argv[1][:19],"%Y-%m-%dT%H:%M:%S").replace(tzinfo=u); sys.exit(0 if t < datetime.datetime.now(u) else 1)' "$GENESIS_TIME"; then
+  echo "WARNING: GENESIS_TIME $GENESIS_TIME is in the past: the chain produces its first block as soon" >&2
+  echo "  the validator starts. That is fine for devnet-1 if it is what you mean; a launch time is usually ahead." >&2
+fi
 
 case "$binary" in
   */*) ;;
@@ -87,7 +96,9 @@ case "$binary" in
 esac
 if [ ! -f "$binary" ] || [ ! -x "$binary" ]; then die "binary not found or not executable: $binary"; fi
 binary="$(cd "$(dirname "$binary")" && pwd -P)/$(basename "$binary")"
-bin_version=$("$binary" version 2>&1 | tail -1) || die "$binary does not run ('version' failed)"
+vhome=$(mktemp -d "${TMPDIR:-/tmp}/devnet-keys-version.XXXXXX")   # `version` writes a client config to its --home
+bin_version=$("$binary" version --home "$vhome" 2>&1 | tail -1) || { rm -rf "$vhome"; die "$binary does not run ('version' failed)"; }
+rm -rf "$vhome"
 
 sha256_of() { # sha256sum is coreutils (Linux); macOS ships shasum instead
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
@@ -95,9 +106,24 @@ sha256_of() { # sha256sum is coreutils (Linux); macOS ships shasum instead
 }
 bin_sha=$(sha256_of "$binary")
 
-for n in "$self_delegation" "$min_self_delegation"; do
-  case "$n" in ""|*[!0-9]*|0) [ -z "$n" ] || die "'$n' must be a positive whole number" ;; esac
-done
+# Whole numbers, normalised so "00" or "007" can't slip past as text; a gentx
+# that `genesis validate` accepts but InitChain rejects is caught here instead
+# (PR #5 review: moniker > 70 chars, min self-delegation > self-delegation and
+# "00" all produced a genesis that verified and then panicked at InitChain).
+norm_int() { # norm_int <value> <name>: prints the positive integer without leading zeros
+  case "$1" in ""|*[!0-9]*) die "$2 '$1' must be a positive whole number" ;; esac
+  local v; v=$(python3 -c 'import sys; print(int(sys.argv[1]))' "$1")
+  [ "$v" != 0 ] || die "$2 must be greater than 0"
+  printf '%s' "$v"
+}
+[ -z "$self_delegation" ] || self_delegation=$(norm_int "$self_delegation" --self-delegation)
+min_self_delegation=$(norm_int "$min_self_delegation" --min-self-delegation)
+# x/staking MaxMonikerLength = 70; an empty or whitespace-only moniker is refused too.
+python3 - "$moniker" <<'PY' || die "--moniker must be 1-70 characters, not blank, no control characters (x/staking MaxMonikerLength)"
+import sys
+m = sys.argv[1]
+sys.exit(0 if m.strip() and len(m) <= 70 and m.isprintable() else 1)
+PY
 python3 - "$commission_rate" "$commission_max_rate" "$commission_max_change_rate" <<'PY' || die "commission: need 0.05 <= rate <= max-rate <= 1 and 0 < max-change-rate <= max-rate (D10: min_commission_rate 5 %)"
 import sys
 from decimal import Decimal, InvalidOperation
@@ -107,7 +133,8 @@ except InvalidOperation:
     sys.exit(1)
 sys.exit(0 if Decimal("0.05") <= r <= m <= 1 and 0 < c <= m else 1)
 PY
-[[ $p2p_ip =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "--p2p-ip must be an IPv4 address, got '$p2p_ip'"
+python3 -c 'import ipaddress,sys; ipaddress.IPv4Address(sys.argv[1])' "$p2p_ip" 2>/dev/null \
+  || die "--p2p-ip must be an IPv4 address, got '$p2p_ip'"
 
 # The key directory: new, outside every git work tree (so no `git add .` can
 # ever publish a key), created 0700.
@@ -137,8 +164,12 @@ for f in allocations.json genesis.json genesis.sha256 genesis.pre-gentx.json gen
 done
 
 boot_kash=$(python3 -c 'import json,sys; print(sum(r["kash"] for r in json.load(open(sys.argv[1])) if r["note"].startswith("validator bootstrap")))' "$repo/$net/allocations.example.json")
-[ -n "$self_delegation" ] || self_delegation=$boot_kash
+liquid_default=1000
+[ -n "$self_delegation" ] || self_delegation=$((boot_kash - liquid_default))
 [ "$self_delegation" -le "$boot_kash" ] || die "--self-delegation $self_delegation KASH exceeds the validator's allocation ($boot_kash KASH)"
+python3 -c 'import sys; sys.exit(0 if int(sys.argv[1]) <= int(sys.argv[2]) * 10**18 else 1)' "$min_self_delegation" "$self_delegation" \
+  || die "--min-self-delegation ${min_self_delegation}esp exceeds the self-delegation (${self_delegation} KASH = ${self_delegation}000000000000000000esp): the validator could never be created"
+[ "$self_delegation" -lt "$boot_kash" ] || echo "WARNING: the whole validator row is self-delegated; the operator account keeps 0 liquid KASH and cannot pay fees until another account funds it." >&2
 
 # The consensus and p2p keys are plain files: keep them off synced folders.
 case "$key_dir/" in
@@ -174,6 +205,9 @@ pw=$(read_secret "Keyring password: ")
 pw2=$(read_secret "Repeat password: ")
 [ "$pw" = "$pw2" ] || die "passwords do not match"
 unset pw2
+# The SDK trims the password it reads, so leading/trailing whitespace would make
+# the check below count characters the keyring never sees (PR #5 review).
+case "$pw" in [[:space:]]*|*[[:space:]]) die "the password must not start or end with whitespace (the keyring trims it)" ;; esac
 [ "${#pw}" -ge 8 ] || die "password must be at least 8 characters"
 
 # --- keys ------------------------------------------------------------------------
@@ -189,6 +223,7 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -m 0700 "$key_dir"
+chome="$tmp/client-home"   # client config for keys/debug calls; deleted on exit
 
 kr=(--keyring-backend file --keyring-dir "$key_dir")
 quiet() { # quiet <description> <cmd...>: silent on success, output on failure (never secrets: see callers)
@@ -206,7 +241,7 @@ for k in "${keys[@]}"; do
   # A new file keyring asks for the password twice; an existing one once.
   if [ "$first" = 1 ]; then input=$(printf '%s\n%s\n' "$pw" "$pw"); first=0
   else input=$(printf '%s\n' "$pw"); fi
-  if ! out=$("$binary" keys add "$k" "${kr[@]}" --no-backup --output json <<<"$input" 2>"$tmp/err"); then
+  if ! out=$("$binary" keys add "$k" "${kr[@]}" --home "$chome" --no-backup --output json <<<"$input" 2>"$tmp/err"); then
     echo "keys add $k failed:" >&2; cat "$tmp/err" >&2; exit 1
   fi
   a=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["address"])' "$out")
@@ -280,7 +315,7 @@ if ! "$binary" genesis gentx validator "${self_delegation}000000000000000000esp"
   echo "genesis gentx failed:" >&2; cat "$tmp/out" >&2; exit 1
 fi
 unset pw
-echo "== gentx: $self_delegation KASH self-delegated, commission $commission_rate (max $commission_max_rate, change $commission_max_change_rate/day), min self-delegation ${min_self_delegation}esp"
+echo "== gentx: $self_delegation KASH self-delegated ($((boot_kash - self_delegation)) KASH liquid), commission $commission_rate (max $commission_max_rate, change $commission_max_change_rate/day), min self-delegation ${min_self_delegation}esp"
 
 # The gentx is public (it is inside genesis.json anyway); publish it next to the
 # genesis so anyone can re-run gen-genesis.sh and get the same sha256 (§6.2).
@@ -302,7 +337,7 @@ mkdir -p "$tmp/bin"; ln -s "$binary" "$tmp/bin/konstellationd"
 PATH="$tmp/bin:$PATH" "$repo/scripts/verify.sh" "$net"
 
 # --- public record + instructions --------------------------------------------------
-faucet_hex=$("$binary" debug addr "$faucet" | sed -n 's/^Address hex: //p')
+faucet_hex=$("$binary" debug addr "$faucet" --home "$chome" | sed -n 's/^Address hex: //p')
 {
   echo "devnet-1 key ceremony, $(date -u +%Y-%m-%dT%H:%M:%SZ). Everything in this file is PUBLIC."
   echo "binary         $bin_version  sha256 $bin_sha ($(uname -s)/$(uname -m))"
@@ -340,15 +375,13 @@ VALIDATOR SERVER (server 1) gets exactly two files, into <node home>/config/, mo
   Nothing else from this directory goes to any server, and no keyring goes there.
 
 FAUCET: the service reads the faucet key's EVM private key from FAUCET_PRIVATE_KEY
-  (faucet README, "Key handling"). Export it only when you deploy the faucet, and
-  send it straight to where the service reads it, never through the screen:
-    $binary keys unsafe-export-eth-key faucet --keyring-backend file \\
-        --keyring-dir "$key_dir" \\
-      | ssh <faucet host> 'umask 077; { printf "FAUCET_PRIVATE_KEY="; cat; } > <faucet env file>'
-  It asks two passwords: first a throwaway export password (any 8+ characters,
-  used only in memory), then the keyring password. Or paste the printed hex into
-  the deployment's secret (Coolify/Docker) by hand. Never into a repo, a chat or
-  shell history. Faucet account: $faucet / $faucet_hex
+  (faucet README, "Key handling"). Install it only when you deploy the faucet, with
+    $repo/scripts/devnet-faucet-key.sh --binary "$binary" \\
+      --key-dir "$key_dir" --to <ssh host>:<faucet env file>
+  It exports the key locally first (a throwaway export password, then the keyring
+  password), refuses anything that is not a 64-hex key, then replaces only the
+  FAUCET_PRIVATE_KEY= line in the env file over ssh; the key never reaches the
+  screen, an argument list or shell history. Faucet account: $faucet / $faucet_hex
 
 NEXT, in $repo:
   1. git status: the new files are devnet-1/allocations.json, devnet-1/gentx/,

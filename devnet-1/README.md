@@ -171,8 +171,9 @@ konstellationd status | jq .sync_info
 ## Genesis allocation
 
 The `TOKENOMICS.md §7` shape (1 B KASH), filled with **test addresses**, same
-as testnet-1 except that the whole 12 % bootstrap bucket (120 M) is
-self-delegated by the single foundation validator. The faucet holds the 8 %
+as testnet-1 except that the whole 12 % bootstrap bucket (120 M) goes to the
+single foundation validator, which self-delegates all of it but 1 000 KASH
+(kept liquid for fees). The faucet holds the 8 %
 "liquidity & public distribution" bucket. See `allocations.example.json` and
 `../scripts/gen-genesis.sh` (which refuses a devnet-1 genesis with other than
 one gentx).
@@ -220,22 +221,32 @@ What the key directory holds (created `0700`):
 (or `age -p`). Losing both means a new devnet genesis.
 
 **Faucet key:** the `faucet` service reads the faucet account's EVM private
-key from `FAUCET_PRIVATE_KEY`. Export it only when deploying the faucet, piped
-straight to where the service reads it:
+key from `FAUCET_PRIVATE_KEY`. Install it only when deploying the faucet, with
+[`../scripts/devnet-faucet-key.sh`](../scripts/devnet-faucet-key.sh):
 
 ```sh
-konstellationd keys unsafe-export-eth-key faucet --keyring-backend file \
-    --keyring-dir ~/konstellation-keys/devnet-1 \
-  | ssh <faucet host> 'umask 077; { printf "FAUCET_PRIVATE_KEY="; cat; } > <faucet env file>'
+scripts/devnet-faucet-key.sh --binary <konstellationd> \
+  --key-dir ~/konstellation-keys/devnet-1 --to <ssh host>:<faucet env file>
 ```
 
-It asks a throwaway export password (any 8+ characters) and then the keyring
-password. The faucet holds the 80 M "liquidity" row; its README advises
-topping the service's key up in tranches instead, which would need a separate
-liquidity key (not done: the example allocations give the faucet the row).
+It exports the key locally first: a throwaway export password (any 8+
+characters, used only in memory), then the keyring password, typed on the
+terminal. It refuses anything that is not a 64-hex key, so a wrong password
+never installs an empty key. Only then does it ssh, and it replaces **just**
+the `FAUCET_PRIVATE_KEY=` line; `RPC_URL`, `CHAIN_ID` and the rest of the env
+file are kept, and the file ends up `0600`. The key is never printed, never an
+argument, never in shell history. The faucet holds the 80 M "liquidity" row;
+its README advises topping the service's key up in tranches instead, which
+would need a separate liquidity key (not done: the example allocations give
+the faucet the row).
 
-Gentx defaults: the whole 120 M bootstrap row self-delegated, commission 5 %
+Gentx defaults: 119 999 000 KASH of the 120 M bootstrap row self-delegated
+(1 000 KASH stays liquid, so the operator can pay fees to withdraw rewards or
+edit the validator), commission 5 %
 (the D10 minimum; max 20 %, max change 1 %/day), `min-self-delegation` 1 esp,
 and `127.0.0.1` as the IP in the gentx memo so no real address is published
 (peering comes from `persistent_peers.txt`). Each is a flag; see
-`scripts/devnet-keys.sh --help`.
+`scripts/devnet-keys.sh --help`. Every value is checked before any key exists,
+including the ones `genesis validate` accepts but InitChain rejects: a moniker
+over 70 characters, a minimum self-delegation above the self-delegation, and a
+zero amount written as `00`.

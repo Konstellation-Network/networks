@@ -45,6 +45,7 @@ networks/
     ├── verify.sh               # what CI runs; run it before every commit
     ├── gen-genesis.sh          # reproducible genesis from binary + allocations + gentxs
     ├── devnet-keys.sh          # devnet-1 only: create its keys + run the whole ceremony
+    ├── devnet-faucet-key.sh    # devnet-1 only: install the faucet key into the faucet env file
     └── networks.sh             # known networks and their launch-validator counts (sourced)
 ```
 

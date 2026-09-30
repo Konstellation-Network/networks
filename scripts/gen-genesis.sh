@@ -75,6 +75,10 @@ command -v "$binary" >/dev/null 2>&1 || { echo "binary not found: $binary" >&2; 
 if [ "$pre_gentx" = 0 ] && [ -z "$gentxs" ]; then
   echo "either --gentxs <dir> or --pre-gentx is required (a final genesis needs launch validators)" >&2; exit 2
 fi
+# Scratch node home, created before the first binary call: every call gets an
+# explicit --home, so nothing is written to ~/.konstellationd.
+home=$(mktemp -d "${TMPDIR:-/tmp}/gen-genesis.XXXXXX")
+trap 'rm -rf "$home"' EXIT
 if [ "$pre_gentx" = 0 ] && [ -z "$circuit_admin" ]; then
   echo "--circuit-admin <kons1...> is required for a final genesis: init closes validator" >&2
   echo "admission (D16) and nobody could open it without a governance proposal (STATUS P28)" >&2
@@ -87,7 +91,7 @@ if [ -n "$circuit_admin" ]; then
   esac
   # The binary checks the bech32 checksum; a typo here would otherwise only
   # surface when the admin first tries to sign.
-  if ! "$binary" debug addr "$circuit_admin" >/dev/null 2>&1; then
+  if ! "$binary" debug addr "$circuit_admin" --home "$home/client" >/dev/null 2>&1; then
     echo "--circuit-admin '$circuit_admin' is not a valid bech32 address" >&2; exit 2
   fi
 fi
@@ -102,10 +106,7 @@ if [ -n "$gentxs" ]; then
 fi
 mkdir -p "$net"
 
-home=$(mktemp -d "${TMPDIR:-/tmp}/gen-genesis.XXXXXX")
-trap 'rm -rf "$home"' EXIT
-
-echo "== binary: $("$binary" version 2>/dev/null | tail -1) ($(command -v "$binary"))"
+echo "== binary: $("$binary" version --home "$home/client" 2>/dev/null | tail -1) ($(command -v "$binary"))"
 
 # 1. Chain defaults. `init` with a real network's chain-id writes every module's
 #    genesis from app.DefaultGenesis (esp everywhere, D10/D11 params, the

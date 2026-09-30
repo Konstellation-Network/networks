@@ -186,11 +186,13 @@ PY
     fi
     if command -v konstellationd >/dev/null 2>&1; then
       # --home a throwaway dir: without it the binary writes ~/.konstellationd/config/*.toml.
-      if konstellationd genesis validate "$net/genesis.json" --home "$(mktemp -d)" >/dev/null 2>&1; then
+      vhome=$(mktemp -d "${TMPDIR:-/tmp}/verify.XXXXXX")
+      if konstellationd genesis validate "$net/genesis.json" --home "$vhome" >/dev/null 2>&1; then
         ok "$net/genesis.json: konstellationd genesis validate"
       else
         err "$net/genesis.json: konstellationd genesis validate failed"
       fi
+      rm -rf "$vhome"
     else
       echo "skip: konstellationd not on PATH, 'genesis validate' not run"
     fi
