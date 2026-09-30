@@ -11,8 +11,8 @@
 #     konstellation-1 4 (D7, re-decided 2026-09-29)
 #   - for a known network, genesis.json keeps validator admission closed and
 #     openable: x/circuit disabled_type_urls is exactly [MsgCreateValidator]
-#     (D16) and account_permissions holds at least one LEVEL_SUPER_ADMIN with a
-#     kons1 address (STATUS P28)
+#     (D16) and account_permissions holds at least one LEVEL_SUPER_ADMIN whose
+#     address is valid kons1 bech32 and holds a genesis balance (STATUS P28)
 #   - allocations.example.json, if present, is the TOKENOMICS.md §7 shape:
 #     sums to 1 000 000 000 KASH and, for a known network, has one
 #     "validator bootstrap ..." entry per launch validator summing to the
@@ -125,17 +125,45 @@ for net in "${nets[@]}"; do
         else err "$net/genesis.json: $ngen gentxs, $net launches with $want_vals validator(s) (scripts/networks.sh)"; fi
         if msg=$(python3 - "$net/genesis.json" 2>&1 <<'PY'
 import json, sys
-c = ((json.load(open(sys.argv[1])).get("app_state") or {}).get("circuit") or {})
+d = json.load(open(sys.argv[1]))
+c = ((d.get("app_state") or {}).get("circuit") or {})
 gate = "/cosmos.staking.v1beta1.MsgCreateValidator"
 if c.get("disabled_type_urls") != [gate]:
     sys.exit(f"circuit disabled_type_urls is {c.get('disabled_type_urls')!r}, want [{gate!r}] (D16)")
+# x/circuit InitGenesis panics on an address it cannot decode, and
+# `genesis validate` does not check (circuit@v0.2.0 keeper/genesis.go), so a
+# malformed admin would stop the chain at InitChain: check the bech32
+# checksum here, where CI runs without a binary (BIP-173).
+def bech32_ok(addr, hrp="kons"):
+    if addr != addr.lower() or not addr.startswith(hrp + "1"):
+        return False
+    data = addr[len(hrp) + 1:]
+    charset = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+    if len(data) < 7 or any(ch not in charset for ch in data):
+        return False
+    values = [ord(x) >> 5 for x in hrp] + [0] + [ord(x) & 31 for x in hrp] + [charset.index(ch) for ch in data]
+    gen = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
+    chk = 1
+    for v in values:
+        b = chk >> 25
+        chk = (chk & 0x1ffffff) << 5 ^ v
+        for i in range(5):
+            chk ^= gen[i] if (b >> i) & 1 else 0
+    return chk == 1
+# protojson accepts the enum by name or by number (LEVEL_SUPER_ADMIN = 3).
 admins = [p.get("address", "") for p in c.get("account_permissions") or []
-          if (p.get("permissions") or {}).get("level") == "LEVEL_SUPER_ADMIN"]
+          if (p.get("permissions") or {}).get("level") in ("LEVEL_SUPER_ADMIN", 3)]
 if not admins:
     sys.exit("circuit has no LEVEL_SUPER_ADMIN in account_permissions: admission could only be opened by governance (P28)")
-bad = [a for a in admins if not a.startswith("kons1")]
+bad = [a for a in admins if not bech32_ok(a)]
 if bad:
-    sys.exit(f"circuit super admin(s) not kons1 addresses: {bad}")
+    sys.exit(f"circuit super admin(s) not valid kons1 bech32 addresses (x/circuit would panic at InitChain): {bad}")
+# An address with no balance has no account and cannot sign (P28 live test).
+funded = {b.get("address") for b in ((d.get("app_state") or {}).get("bank") or {}).get("balances") or []
+          if any(int(c.get("amount", "0")) > 0 for c in b.get("coins") or [])}
+unfunded = [a for a in admins if a not in funded]
+if unfunded:
+    sys.exit(f"circuit super admin(s) hold no genesis balance, so they cannot sign: {unfunded}")
 print(f"admission gated, super admin {', '.join(admins)}")
 PY
         ); then ok "$net/genesis.json: $msg"
