@@ -9,6 +9,10 @@
 #   - for a known network (scripts/networks.sh), genesis.json carries exactly
 #     its launch-validator count of gentxs: devnet-1 1, testnet-1 and
 #     konstellation-1 4 (D7, re-decided 2026-09-29)
+#   - for a known network, genesis.json keeps validator admission closed and
+#     openable: x/circuit disabled_type_urls is exactly [MsgCreateValidator]
+#     (D16) and account_permissions holds at least one LEVEL_SUPER_ADMIN with a
+#     kons1 address (STATUS P28)
 #   - allocations.example.json, if present, is the TOKENOMICS.md §7 shape:
 #     sums to 1 000 000 000 KASH and, for a known network, has one
 #     "validator bootstrap ..." entry per launch validator summing to the
@@ -119,6 +123,23 @@ for net in "${nets[@]}"; do
         ngen=$(json_get "$net/genesis.json" 'len(((d.get("app_state") or {}).get("genutil") or {}).get("gen_txs") or [])')
         if [ "$ngen" = "$want_vals" ]; then ok "$net/genesis.json: $ngen gentxs"
         else err "$net/genesis.json: $ngen gentxs, $net launches with $want_vals validator(s) (scripts/networks.sh)"; fi
+        if msg=$(python3 - "$net/genesis.json" 2>&1 <<'PY'
+import json, sys
+c = ((json.load(open(sys.argv[1])).get("app_state") or {}).get("circuit") or {})
+gate = "/cosmos.staking.v1beta1.MsgCreateValidator"
+if c.get("disabled_type_urls") != [gate]:
+    sys.exit(f"circuit disabled_type_urls is {c.get('disabled_type_urls')!r}, want [{gate!r}] (D16)")
+admins = [p.get("address", "") for p in c.get("account_permissions") or []
+          if (p.get("permissions") or {}).get("level") == "LEVEL_SUPER_ADMIN"]
+if not admins:
+    sys.exit("circuit has no LEVEL_SUPER_ADMIN in account_permissions: admission could only be opened by governance (P28)")
+bad = [a for a in admins if not a.startswith("kons1")]
+if bad:
+    sys.exit(f"circuit super admin(s) not kons1 addresses: {bad}")
+print(f"admission gated, super admin {', '.join(admins)}")
+PY
+        ); then ok "$net/genesis.json: $msg"
+        else err "$net/genesis.json: $msg"; fi
       fi
     fi
     if [ ! -f "$net/genesis.sha256" ]; then
