@@ -44,6 +44,7 @@ networks/
 └── scripts/
     ├── verify.sh               # what CI runs; run it before every commit
     ├── gen-genesis.sh          # reproducible genesis from binary + allocations + gentxs
+    ├── devnet-keys.sh          # devnet-1 only: create its keys + run the whole ceremony
     └── networks.sh             # known networks and their launch-validator counts (sourced)
 ```
 
@@ -89,6 +90,30 @@ Who holds it: a single dev key on devnet-1; testnet-1 is undecided; the 3-of-5
 operations multisig on mainnet.
 
 Record the binary version and sha256 used in `RELEASES.md` in the same commit.
+Commit `<net>/allocations.json` (and the gentxs, `<net>/gentx/`) with the
+genesis: they are public, and they are the inputs anyone needs to reproduce
+the hash.
+
+### devnet-1: `scripts/devnet-keys.sh`
+
+devnet-1 has one validator and one key holder (the founder: STATUS P29, and
+a single dev key as circuit super admin, decided 2026-09-30), so its whole
+ceremony is one script run once on the founder's PC. It creates every devnet-1
+key in a password-protected `file` keyring in a new directory outside any git
+repo, writes `devnet-1/allocations.json` from `allocations.example.json`, runs
+`gen-genesis.sh --pre-gentx`, the gentx, the final `gen-genesis.sh` (twice, to
+prove it is byte-identical) and `verify.sh devnet-1`. Order:
+
+1. the `konstellation` release tag exists (signed, provenance attested);
+2. build `konstellationd` from that tag and run the script with it (the
+   exact command and what it creates: [`devnet-1/README.md`](devnet-1/README.md#cutting-the-genesis-maintainers));
+3. commit `devnet-1/allocations.json`, `devnet-1/gentx/`, `devnet-1/genesis.json`
+   and `devnet-1/genesis.sha256` together;
+4. record the release in `RELEASES.md` in the same PR.
+
+testnet-1 and konstellation-1 do not use it: their validators, admins and
+treasuries are held by different people and multisigs, so their ceremonies
+are the two-step flow above.
 
 ## Upgrades
 
