@@ -57,7 +57,7 @@ allocations="$net/allocations.json"; gentxs=""; binary="konstellationd"; pre_gen
 while [ $# -gt 0 ]; do
   case "$1" in
     --allocations|--gentxs|--binary|--circuit-admin)
-      [ $# -ge 2 ] && [ -n "$2" ] || { echo "$1 needs a value" >&2; exit 2; } ;;
+      if [ $# -lt 2 ] || [ -z "$2" ]; then echo "$1 needs a value" >&2; exit 2; fi ;;
   esac
   case "$1" in
     --allocations) allocations=$2; shift 2 ;;
