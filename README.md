@@ -73,9 +73,20 @@ any operator can reproduce the hash rather than trust it.
 # 1. allocation-only genesis for validators to gentx against
 GENESIS_TIME=2026-10-01T12:00:00Z scripts/gen-genesis.sh testnet-1 --pre-gentx
 # 2. final genesis once the gentxs are in
-GENESIS_TIME=2026-10-01T12:00:00Z scripts/gen-genesis.sh testnet-1 --gentxs ./gentxs
+GENESIS_TIME=2026-10-01T12:00:00Z scripts/gen-genesis.sh testnet-1 --gentxs ./gentxs \
+    --circuit-admin kons1...
 scripts/verify.sh testnet-1
 ```
+
+`--circuit-admin` is required for a final genesis. `init` closes validator
+admission (`MsgCreateValidator` in `x/circuit`'s disable list, D16), and the
+circuit super admin is the key that opens the window for each admission and trips
+the breaker in an emergency. Without one, both would first need a governance
+proposal. The admin must also have a row in the allocations: an address with no
+balance has no account on chain and cannot sign. `verify.sh` checks that every
+known network's genesis keeps the gate closed and names at least one super admin.
+Who holds it: a single dev key on devnet-1; testnet-1 is undecided; the 3-of-5
+operations multisig on mainnet.
 
 Record the binary version and sha256 used in `RELEASES.md` in the same commit.
 

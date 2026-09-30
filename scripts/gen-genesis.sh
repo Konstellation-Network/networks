@@ -12,7 +12,7 @@
 # Usage:
 #   GENESIS_TIME=2026-10-01T12:00:00Z scripts/gen-genesis.sh <net> \
 #       [--allocations <net>/allocations.json] [--gentxs <dir>] \
-#       [--binary /path/to/konstellationd] [--pre-gentx]
+#       [--circuit-admin <kons1...>] [--binary /path/to/konstellationd] [--pre-gentx]
 #
 #   --allocations  JSON list of {"address","kash","note"}; amounts in whole KASH
 #                  (1 KASH = 10^18 esp). Default: <net>/allocations.json.
@@ -22,6 +22,14 @@
 #                  konstellation-1 4 — D7 re-decided 2026-09-29).
 #                  Omit with --pre-gentx to publish the allocation-only genesis
 #                  that validators run `konstellationd genesis gentx` against.
+#   --circuit-admin  the x/circuit super admin (LEVEL_SUPER_ADMIN in
+#                  app_state.circuit.account_permissions). Required for a
+#                  final genesis (--gentxs). `init` closes validator admission
+#                  (MsgCreateValidator in disabled_type_urls, D16); without a
+#                  super admin, every admission window and every emergency trip
+#                  would first need a governance proposal (STATUS P28).
+#                  devnet-1: a single dev key (decided 2026-09-30); mainnet:
+#                  the 3-of-5 operations multisig (ENGINEERING.md §13.1, §18).
 #   --binary       konstellationd to use. Default: `konstellationd` on PATH.
 #                  Record the binary's version + sha256 in RELEASES.md.
 #   --pre-gentx    write <net>/genesis.pre-gentx.json instead of genesis.json
@@ -45,12 +53,17 @@ net=${net%/}
 case "$net" in
   ""|*/*|.*) echo "'$net' is not a plain network directory name (it becomes the chain-id)" >&2; exit 2 ;;
 esac
-allocations="$net/allocations.json"; gentxs=""; binary="konstellationd"; pre_gentx=0
+allocations="$net/allocations.json"; gentxs=""; binary="konstellationd"; pre_gentx=0; circuit_admin=""
 while [ $# -gt 0 ]; do
+  case "$1" in
+    --allocations|--gentxs|--binary|--circuit-admin)
+      if [ $# -lt 2 ] || [ -z "$2" ]; then echo "$1 needs a value" >&2; exit 2; fi ;;
+  esac
   case "$1" in
     --allocations) allocations=$2; shift 2 ;;
     --gentxs)      gentxs=$2; shift 2 ;;
     --binary)      binary=$2; shift 2 ;;
+    --circuit-admin) circuit_admin=$2; shift 2 ;;
     --pre-gentx)   pre_gentx=1; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -61,6 +74,22 @@ done
 command -v "$binary" >/dev/null 2>&1 || { echo "binary not found: $binary" >&2; exit 2; }
 if [ "$pre_gentx" = 0 ] && [ -z "$gentxs" ]; then
   echo "either --gentxs <dir> or --pre-gentx is required (a final genesis needs launch validators)" >&2; exit 2
+fi
+if [ "$pre_gentx" = 0 ] && [ -z "$circuit_admin" ]; then
+  echo "--circuit-admin <kons1...> is required for a final genesis: init closes validator" >&2
+  echo "admission (D16) and nobody could open it without a governance proposal (STATUS P28)" >&2
+  exit 2
+fi
+if [ -n "$circuit_admin" ]; then
+  case "$circuit_admin" in
+    kons1*) ;;
+    *) echo "--circuit-admin must be a kons1... account address, got '$circuit_admin'" >&2; exit 2 ;;
+  esac
+  # The binary checks the bech32 checksum; a typo here would otherwise only
+  # surface when the admin first tries to sign.
+  if ! "$binary" debug addr "$circuit_admin" >/dev/null 2>&1; then
+    echo "--circuit-admin '$circuit_admin' is not a valid bech32 address" >&2; exit 2
+  fi
 fi
 if [ -n "$gentxs" ]; then
   gentx_files=("$gentxs"/*.json)
@@ -109,6 +138,15 @@ for a in allocs:
 print(total)
 PY
 )
+# The super admin signs txs, so it must exist on chain from block 1: an address
+# with no balance has no account, and every tx from it fails with "account ...
+# not found" — the admission window and an emergency trip would both wait on
+# someone funding it first. Found by the P28 live-node test, 2026-09-30.
+if [ -n "$circuit_admin" ] && ! python3 -c 'import json,sys; sys.exit(0 if any(a["address"]==sys.argv[2] for a in json.load(open(sys.argv[1]))) else 1)' "$allocations" "$circuit_admin"; then
+  echo "--circuit-admin $circuit_admin has no allocation in $allocations: it would not exist" >&2
+  echo "on chain and could not sign. Give it a row (a small amount for fees, from the treasury bucket)." >&2
+  exit 2
+fi
 expected_supply=1000000000
 if [ "$total" != "$expected_supply" ]; then
   echo "allocations sum to $total KASH, TOKENOMICS.md §7 genesis supply is $expected_supply KASH" >&2
@@ -128,18 +166,30 @@ if [ -n "$gentxs" ]; then
 fi
 
 # 4. Fix genesis_time (init stamps "now", which would make the file
-#    non-reproducible) and validate.
-python3 - "$home/config/genesis.json" "$GENESIS_TIME" <<'PY'
+#    non-reproducible), write the circuit super admin, and validate. The
+#    disable list itself comes from `init` (konstellation PR #14); refuse a
+#    binary that did not write it rather than patch it in here.
+python3 - "$home/config/genesis.json" "$GENESIS_TIME" "$circuit_admin" <<'PY'
 import json, sys
-p, t = sys.argv[1], sys.argv[2]
+p, t, admin = sys.argv[1], sys.argv[2], sys.argv[3]
 g = json.load(open(p))
 g["genesis_time"] = t
+circuit = g["app_state"]["circuit"]
+gate = "/cosmos.staking.v1beta1.MsgCreateValidator"
+if circuit.get("disabled_type_urls") != [gate]:
+    sys.exit(f"init wrote circuit disabled_type_urls {circuit.get('disabled_type_urls')!r}, "
+             f"expected [{gate!r}] (D16); is this binary older than konstellation PR #14?")
+if admin:
+    circuit["account_permissions"] = [
+        {"address": admin, "permissions": {"level": "LEVEL_SUPER_ADMIN", "limit_type_urls": []}}
+    ]
 with open(p, "w") as f:
     json.dump(g, f, indent=2, sort_keys=True)
     f.write("\n")
 PY
 run "genesis validate" "$binary" genesis validate "$home/config/genesis.json" --home "$home"
 echo "== genesis validate: ok (genesis_time $GENESIS_TIME)"
+[ -z "$circuit_admin" ] || echo "== circuit super admin: $circuit_admin"
 
 # 5. Publish into the repo.
 if [ "$pre_gentx" = 1 ]; then
